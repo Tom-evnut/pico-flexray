@@ -110,6 +110,7 @@ typedef struct {
     uint32_t source_fr4;
     uint32_t overflow_len;
     uint32_t zero_len;
+    uint32_t crc_fail_sent; // payload-CRC failures reported to the host (record format 2)
 } stream_stats_t;
 
 uint8_t FRAME_CACHE[262][10];
@@ -124,7 +125,8 @@ static void stats_print(const stream_stats_t *s, uint32_t prev_total, uint32_t p
            s->source_fr3, s->source_fr4,
            s->len_ok, s->len_mismatch, s->overflow_len, s->zero_len,
            s->parse_fail, s->valid, total_fps, valid_fps);
-    printf("Notify dropped=%lu\n", notify_queue_dropped());
+    printf("Notify dropped=%lu crc_fail_sent=%lu record_format=%u\n", notify_queue_dropped(), s->crc_fail_sent,
+           panda_record_format());
 }
 
 void core1_entry(void)
@@ -272,7 +274,8 @@ int main(void)
         static uint32_t last_seq = 0;
 
         uint32_t encoded;
-        if (!notify_queue_pop(&encoded))
+        uint32_t frame_end_us;
+        if (!notify_queue_pop(&encoded, &frame_end_us))
         {
             panda_usb_task();
             __wfe();
@@ -350,6 +353,8 @@ int main(void)
                 else if (is_valid_frame(&frame, header))
                 {
                     stats.valid++;
+                    frame.timestamp_us = frame_end_us;
+                    frame.flags = FRAME_FLAG_HEADER_CRC_OK | FRAME_FLAG_FRAME_CRC_OK;
 
                     uint8_t demuxed = lookup_frame_source(frame.frame_id);
                     if (demuxed != FROM_UNKNOWN) {
@@ -360,13 +365,25 @@ int main(void)
                     try_cache_last_target_frame(frame.frame_id, frame.cycle_count, expected_len, header);
                     panda_flexray_fifo_push(&frame);
                 }
+                else if (panda_record_format() >= RECORD_FORMAT_V2 && frame.frame_id < 2048 &&
+                         is_header_crc_ok(&frame, header))
+                {
+                    // Record format 2 also reports frames whose payload CRC failed (header intact, so the slot
+                    // and cycle can be trusted), flagged, for the host to show. Never cached for injection.
+                    stats.crc_fail_sent++;
+                    frame.timestamp_us = frame_end_us;
+                    frame.flags = FRAME_FLAG_HEADER_CRC_OK;
+                    uint8_t demuxed = lookup_frame_source(frame.frame_id);
+                    if (demuxed != FROM_UNKNOWN) frame.source |= demuxed;
+                    panda_flexray_fifo_push(&frame);
+                }
 
                 pos = (uint16_t)(pos + expected_len);
             }
 
             if (info.is_fr2) last_end_idx_fr2 = info.end_idx;
             else last_end_idx_fr1 = info.end_idx;
-        } while (notify_queue_pop(&encoded));
+        } while (notify_queue_pop(&encoded, &frame_end_us));
     }
 
     return 0;

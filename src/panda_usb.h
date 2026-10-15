@@ -45,6 +45,20 @@
 #define PANDA_SET_CAN_FD_DATA_BITRATE   0xf9
 #define PANDA_SET_CAN_FD_NON_ISO_MODE   0xfc
 
+// pico-flexray: bulk IN record format. Format 1 (the default at every USB mount) is the original record:
+//   [u16 body_len LE][u8 source][5-byte header][payload][3-byte CRC]            body_len = 9 + payload
+// Format 2, which a host asks for with PICOFLEX_SET_RECORD_FORMAT, sets bit 15 of the length so it can't be
+// mistaken for format 1 (format 1 lengths are at most 263) and adds a version, flags and a device timestamp:
+//   [u16 0x8000|body_len LE][u8 version=2][u8 flags][u8 source][u32 timestamp_us LE][5-byte header][payload][3-byte CRC]
+//   body_len = 15 + payload; flags = FRAME_FLAG_* (flexray_frame.h); timestamp_us = time_us_32() at frame end.
+// Format 2 also reports frames whose payload CRC failed (FRAME_FLAG_FRAME_CRC_OK clear). Null frames are sent in
+// both formats (null frame indicator in the header).
+#define PICOFLEX_SET_RECORD_FORMAT      0xa0 // vendor OUT, no data: wValue = format (1 or 2)
+#define PICOFLEX_GET_RECORD_FORMAT      0xa1 // vendor IN, 2 bytes: [current format][highest supported]
+#define RECORD_FORMAT_STOCK             1
+#define RECORD_FORMAT_V2                2
+#define RECORD_V2_LEN_FLAG              0x8000u
+
 // Hardware types
 #define HW_TYPE_UNKNOWN             0
 #define HW_TYPE_WHITE_PANDA         1
@@ -130,5 +144,8 @@ void panda_usb_task(void);
 
 // FIFO management - now exposed for external use (e.g., main.c)
 bool panda_flexray_fifo_push(const flexray_frame_t *frame);
+
+// Bulk IN record format the host asked for (RECORD_FORMAT_*)
+uint8_t panda_record_format(void);
 
 #endif /* PANDA_USB_H_ */

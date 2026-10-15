@@ -206,6 +206,16 @@ void print_frame(flexray_frame_t *frame)
     printf("\n");
 }
 
+bool is_header_crc_ok(flexray_frame_t *frame, const uint8_t *raw_buffer)
+{
+    return frame && check_header_crc(frame, raw_buffer);
+}
+
+bool is_frame_crc_ok(flexray_frame_t *frame, const uint8_t *raw_buffer)
+{
+    return frame && check_frame_crc(frame, raw_buffer);
+}
+
 bool is_valid_frame(flexray_frame_t *frame, const uint8_t *raw_buffer)
 {
     if (!frame)

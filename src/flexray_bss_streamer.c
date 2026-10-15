@@ -74,6 +74,7 @@ static inline uint32_t dma_ring_write_idx(uint dma_chan, volatile uint8_t *ring_
 // ===================== Cross-core notification ring =====================
 #define NOTIFY_RING_SIZE 1024u
 static volatile uint32_t notify_ring[NOTIFY_RING_SIZE];
+static volatile uint32_t notify_time_ring[NOTIFY_RING_SIZE]; // frame-end time per notification
 static volatile uint16_t notify_head = 0;
 static volatile uint16_t notify_tail = 0;
 static volatile uint32_t notify_dropped = 0;
@@ -137,7 +138,7 @@ void notify_queue_init(void)
     notify_dropped = 0;
 }
 
-static inline bool notify_queue_push(uint32_t value)
+static inline bool notify_queue_push(uint32_t value, uint32_t timestamp_us)
 {
     uint16_t head = notify_head;
     uint16_t next = (uint16_t)((head + 1u) & (NOTIFY_RING_SIZE - 1u));
@@ -147,12 +148,13 @@ static inline bool notify_queue_push(uint32_t value)
         return false;
     }
     notify_ring[head] = value;
+    notify_time_ring[head] = timestamp_us;
     notify_head = next;
     __sev();
     return true;
 }
 
-bool notify_queue_pop(uint32_t *encoded)
+bool notify_queue_pop(uint32_t *encoded, uint32_t *timestamp_us)
 {
     uint16_t tail = notify_tail;
     if (tail == notify_head)
@@ -160,6 +162,7 @@ bool notify_queue_pop(uint32_t *encoded)
         return false;
     }
     *encoded = notify_ring[tail];
+    *timestamp_us = notify_time_ring[tail];
     notify_tail = (uint16_t)((tail + 1u) & (NOTIFY_RING_SIZE - 1u));
     return true;
 }
@@ -173,6 +176,7 @@ uint32_t notify_queue_dropped(void)
 void __time_critical_func(streamer_irq0_handler)(void)
 {
     sio_hw->gpio_set = (1u << 7);
+    const uint32_t frame_end_us = time_us_32(); // first, so injection work doesn't delay it
     uint32_t start_idx = 0;
 
     irq_handler_call_count++;
@@ -233,7 +237,7 @@ void __time_critical_func(streamer_irq0_handler)(void)
     }
 
     uint32_t encoded = notify_encode(is_fr2, 0, ((irq_counter++) & 0x3FFFF), (uint16_t)idx);
-    (void)notify_queue_push(encoded);
+    (void)notify_queue_push(encoded, frame_end_us);
     sio_hw->gpio_clr = (1u << 7);
 }
 

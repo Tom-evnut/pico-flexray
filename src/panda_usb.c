@@ -36,6 +36,14 @@ static const uint8_t source_decimal[16] = {
 // FlexRay FIFO
 static flexray_fifo_t flexray_fifo;
 
+// Bulk IN record format (see panda_usb.h); back to the original format whenever the host goes away
+static volatile uint8_t record_format = RECORD_FORMAT_STOCK;
+
+uint8_t panda_record_format(void)
+{
+    return record_format;
+}
+
 // For delayed reset/bootloader
 static bool pending_reset = false;
 static bool pending_bootloader = false;
@@ -301,6 +309,12 @@ static bool handle_control_read(uint8_t rhport, tusb_control_request_t const *re
         // printf("Control Read: PANDA_GET_VERSIONS\n");
         break;
 
+    case PICOFLEX_GET_RECORD_FORMAT:
+        response_data[0] = record_format;
+        response_data[1] = RECORD_FORMAT_V2;
+        response_len = 2;
+        break;
+
     case PANDA_UART_READ:
         response_len = 0;
         memset(response_data, 'c', response_len);
@@ -327,6 +341,16 @@ static bool handle_control_write(uint8_t rhport, tusb_control_request_t const *r
     // Handle write requests without data - just process them
     switch (request->bRequest)
     {
+    case PICOFLEX_SET_RECORD_FORMAT:
+        if (request->wValue != RECORD_FORMAT_STOCK && request->wValue != RECORD_FORMAT_V2)
+        {
+            return false; // stall: unsupported format
+        }
+        record_format = (uint8_t)request->wValue;
+        flexray_fifo_init(&flexray_fifo); // queued frames were built for the old format's host
+        handled = true;
+        break;
+
     case PANDA_RESET_CAN_COMMS:
         // printf("Control Write: RESET_CAN_COMMS (request=0x%02x)\n", request->bRequest);
         flexray_fifo_init(&flexray_fifo);
@@ -477,6 +501,7 @@ static bool handle_control_data_stage(tusb_control_request_t const *request, uin
 // Invoked when device is mounted
 void tud_mount_cb(void)
 {
+    record_format = RECORD_FORMAT_STOCK;
     printf("USB Device mounted\n");
     last_usb_activity = get_absolute_time();
 }
@@ -484,6 +509,7 @@ void tud_mount_cb(void)
 // Invoked when device is unmounted
 void tud_umount_cb(void)
 {
+    record_format = RECORD_FORMAT_STOCK;
     printf("USB Device unmounted - clearing application state\n");
 
     // Reset control transfer state - not strictly needed with new design but good practice
@@ -574,8 +600,10 @@ static bool try_send_from_fifo(const char *context)
             break;
         }
 
+        const bool v2 = (record_format == RECORD_FORMAT_V2);
         uint16_t payload_len_bytes = (uint16_t)(frame.payload_length_words * 2u);
-        uint16_t body_len = (uint16_t)(1u /*source*/ + 5u /*header*/ + payload_len_bytes + 3u /*crc*/);
+        uint16_t body_len = (uint16_t)((v2 ? 7u /*version, flags, source, u32 time*/ : 1u /*source*/) +
+                                       5u /*header*/ + payload_len_bytes + 3u /*crc*/);
         uint16_t total_len = (uint16_t)(2u /*len field*/ + body_len);
 
         if (available_space < total_len)
@@ -585,11 +613,25 @@ static bool try_send_from_fifo(const char *context)
         }
 
         // Build record into a small stack buffer and write once
-        uint8_t outbuf[2 + 1 + 5 + MAX_FRAME_PAYLOAD_BYTES + 3];
-        outbuf[0] = (uint8_t)(body_len & 0xFF);
-        outbuf[1] = (uint8_t)((body_len >> 8) & 0xFF);
+        uint8_t outbuf[2 + 7 + 5 + MAX_FRAME_PAYLOAD_BYTES + 3];
+        uint16_t len_field = v2 ? (uint16_t)(body_len | RECORD_V2_LEN_FLAG) : body_len;
+        outbuf[0] = (uint8_t)(len_field & 0xFF);
+        outbuf[1] = (uint8_t)((len_field >> 8) & 0xFF);
         size_t w = 2;
-        outbuf[w++] = source_decimal[frame.source & 0x0F];
+        if (v2)
+        {
+            outbuf[w++] = RECORD_FORMAT_V2;
+            outbuf[w++] = frame.flags;
+            outbuf[w++] = source_decimal[frame.source & 0x0F];
+            outbuf[w++] = (uint8_t)(frame.timestamp_us & 0xFF);
+            outbuf[w++] = (uint8_t)((frame.timestamp_us >> 8) & 0xFF);
+            outbuf[w++] = (uint8_t)((frame.timestamp_us >> 16) & 0xFF);
+            outbuf[w++] = (uint8_t)((frame.timestamp_us >> 24) & 0xFF);
+        }
+        else
+        {
+            outbuf[w++] = source_decimal[frame.source & 0x0F];
+        }
 
         // Reconstruct 5-byte header
         uint8_t byte0 = (uint8_t)((frame.indicators << 3) | ((frame.frame_id >> 8) & 0x07));

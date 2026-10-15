@@ -122,3 +122,22 @@ To visualize FlexRay data using Cabana:
    ```bash
    ./tools/cabana/cabana
    ```
+
+### USB record formats
+
+The bulk IN endpoint (0x81) streams one record per FlexRay frame. Every USB mount starts in **format 1**, the
+original record, so existing tools (Cabana, `flexray_stream_recorder.py`) are unaffected:
+
+    [u16 body_len LE][u8 source][5-byte header][payload][3-byte frame CRC]          body_len = 9 + payload
+
+A host can ask for **format 2** with vendor control request `0xa0` (OUT, no data, `wValue` = 2; `wValue` = 1 goes
+back). Request `0xa1` (IN, 2 bytes) returns the current and the highest supported format. Format 2 sets bit 15 of
+the length, so the two can't be confused, and adds a version, flags and a device timestamp:
+
+    [u16 0x8000|body_len LE][u8 version=2][u8 flags][u8 source][u32 timestamp_us LE][5-byte header][payload][3-byte CRC]
+    body_len = 15 + payload
+
+- `timestamp_us`: `time_us_32()` taken at the start of the frame-end interrupt (wraps every ~71.6 minutes).
+- `flags`: bit 0 = frame CRC correct, bit 1 = header CRC correct. Format 2 also reports frames whose payload CRC
+  failed (bit 0 clear); format 1 drops them as before.
+- Null frames are sent in both formats; the null frame indicator is in the header.

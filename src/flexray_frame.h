@@ -19,6 +19,10 @@
 #define FROM_FR4 (1u << 0)  // 0b0001
 #define FROM_UNKNOWN 0
 
+// flexray_frame_t.flags (sent to the host in record format 2, see panda_usb.h)
+#define FRAME_FLAG_FRAME_CRC_OK  (1u << 0) // 24-bit frame CRC checked and correct
+#define FRAME_FLAG_HEADER_CRC_OK (1u << 1) // 11-bit header CRC checked and correct
+
 // FlexRay frame structure definition based on specification
 typedef struct
 {
@@ -31,6 +35,8 @@ typedef struct
     uint8_t payload_length_words;       // 7 bits (number of 16-bit words)
     uint8_t cycle_count;                // 6 bits
     uint8_t source; // from ecu or vehicle
+    uint8_t flags;  // FRAME_FLAG_*
+    uint32_t timestamp_us; // time_us_32() when the frame ended (frame-end IRQ on core1)
     uint8_t payload[MAX_FRAME_PAYLOAD_BYTES];
 } flexray_frame_t;
 
@@ -39,6 +45,8 @@ bool parse_frame(const uint8_t *raw_buffer, flexray_frame_t *parsed_frame);
 bool parse_frame_from_slice(const uint8_t *raw_buffer, uint16_t slice_len, uint8_t source, flexray_frame_t *parsed_frame);
 void print_frame(flexray_frame_t *frame);
 bool is_valid_frame(flexray_frame_t *frame, const uint8_t *raw_buffer);
+bool is_header_crc_ok(flexray_frame_t *frame, const uint8_t *raw_buffer);
+bool is_frame_crc_ok(flexray_frame_t *frame, const uint8_t *raw_buffer);
 uint16_t calculate_flexray_header_crc(const uint8_t *raw_buffer);
 uint32_t calculate_flexray_frame_crc(const uint8_t *restrict p, const uint16_t len16);
 uint8_t calculate_autosar_e2e_crc8(const uint8_t *restrict p, const uint8_t init_value, const uint8_t len);

@@ -55,7 +55,8 @@ void clear_frame_source_bitmaps(void);
 
 // --- Cross-core notification ring (single producer on core1 ISR, single consumer on core0) ---
 // Encoded format: [31]=is_fr2, [30]=bus(0=FR12,1=FR34), [29:12]=seq(18 bits), [11:0]=ring index
-bool notify_queue_pop(uint32_t *encoded);
+// timestamp_us: time_us_32() taken at the start of the frame-end IRQ
+bool notify_queue_pop(uint32_t *encoded, uint32_t *timestamp_us);
 void notify_queue_init(void);
 uint32_t notify_queue_dropped(void);
 
